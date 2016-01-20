@@ -28,8 +28,6 @@ funk = EX5.planning
 default_job_name = 'Rally'
 job_path = "/root/"
 
-default_deployment_name	= 'os-rally'
- 
 class rally_g5k(Engine):
 
 	def __init__(self):
@@ -38,9 +36,6 @@ class rally_g5k(Engine):
 		self.options_parser.add_option("-k", dest="keep_alive",
 										help="Keep the reservation alive.",
 										action="store_true")
-		self.options_parser.add_option("--deployment-name", dest="deployment_name", default=default_deployment_name,
-										help="The name of the Rally deployment. "
-										"(Default:%s)" % default_deployment_name)
 		self.options_parser.add_option("--job-name", dest="job_name", default=default_job_name,
 										help="Name of the existing OAR job or of the job that will be created. " +
 										"(default: %s)" % default_job_name)
@@ -132,10 +127,11 @@ class rally_g5k(Engine):
 										  check_deployed_command=not self.options.force_deploy)
 
 		# Setup the deployment file
-		cmd = "sed 's/%%HOST%%/%s/;s/%%OS_USERNAME%%/%s/;s/%%OS_PASSWORD%%/%s/;s/%%OS_TENANT%%/%s/' deployment_existing.json.sample > deployment_existing.json" % (self.config['os-controller'],
+		cmd = "sed 's/%%HOST%%/%s/;s/%%OS_USERNAME%%/%s/;s/%%OS_PASSWORD%%/%s/;s/%%OS_TENANT%%/%s/;s/%%OS_REGION%%/%s/' deployment_existing.json.sample > deployment_existing.json" % (self.config['os-controller'],
 				self.config['os-username'],
 				self.config['os-password'],
-				self.config['os-tenant'])
+				self.config['os-tenant'],
+				self.config['os-region'])
 
 		self._run_or_abort(cmd,
 				self.host,
@@ -272,7 +268,12 @@ class rally_g5k(Engine):
 		"""Get the power consumption metrics for Kwapi
 		This call writes a single JSON file with the metrics of all the nodes."""
 
-		compute_nodes = map(lambda x: re.search(r"(\w+\-\d+)\-\w+\-\d+", x).group(1), self.config['os-compute'])
+		compute_nodes = None
+		try:
+			compute_nodes = map(lambda x: re.search(r"(\w+\-\d+)\-\w+\-\d+", x).group(1), self.config['os-compute'])
+		except AttributeError:
+			compute_nodes = map(lambda x: re.search(r"(\w+\-\d+)\.\w+\.grid5000\.fr", x).group(1), self.config['os-compute'])
+
 		url = "/sites/%s/metrics/power/timeseries/?from=%d&to=%d&only=%s" % (self.site, start, end, ','.join(compute_nodes))
 
 		logger.info(url)
