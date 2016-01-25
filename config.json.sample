@@ -8,6 +8,6 @@
 	"os-username": "test",
 	"os-password": "abc123",
 
-	"os-controller": "taurus-16-kavlan-4.lyon.grid5000.fr",
-	"os-compute": ["taurus-4-kavlan-4.lyon.grid5000.fr", "taurus-2-kavlan-4.lyon.grid5000.fr"]
+	"os-controllers": ["taurus-16-kavlan-4.lyon.grid5000.fr"],
+	"os-computes": ["taurus-4-kavlan-4.lyon.grid5000.fr", "taurus-2-kavlan-4.lyon.grid5000.fr"]
 }

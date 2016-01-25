@@ -127,7 +127,8 @@ class rally_g5k(Engine):
 										  check_deployed_command=not self.options.force_deploy)
 
 		# Setup the deployment file
-		cmd = "sed 's/%%HOST%%/%s/;s/%%OS_USERNAME%%/%s/;s/%%OS_PASSWORD%%/%s/;s/%%OS_TENANT%%/%s/;s/%%OS_REGION%%/%s/' deployment_existing.json.sample > deployment_existing.json" % (self.config['os-controller'],
+		cmd = "sed
+		's/%%HOST%%/%s/;s/%%OS_USERNAME%%/%s/;s/%%OS_PASSWORD%%/%s/;s/%%OS_TENANT%%/%s/;s/%%OS_REGION%%/%s/' deployment_existing.json.sample > deployment_existing.json" % (self.config['os-controllers'][0],
 				self.config['os-username'],
 				self.config['os-password'],
 				self.config['os-tenant'],
@@ -270,9 +271,9 @@ class rally_g5k(Engine):
 
 		compute_nodes = None
 		try:
-			compute_nodes = map(lambda x: re.search(r"(\w+\-\d+)\-\w+\-\d+", x).group(1), self.config['os-compute'])
+			compute_nodes = map(lambda x: re.search(r"(\w+\-\d+)\-\w+\-\d+", x).group(1), self.config['os-computes'])
 		except AttributeError:
-			compute_nodes = map(lambda x: re.search(r"(\w+\-\d+)\.\w+\.grid5000\.fr", x).group(1), self.config['os-compute'])
+			compute_nodes = map(lambda x: re.search(r"(\w+\-\d+)\.\w+\.grid5000\.fr", x).group(1), self.config['os-computes'])
 
 		url = "/sites/%s/metrics/power/timeseries/?from=%d&to=%d&only=%s" % (self.site, start, end, ','.join(compute_nodes))
 
