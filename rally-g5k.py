@@ -127,8 +127,7 @@ class rally_g5k(Engine):
 										  check_deployed_command=not self.options.force_deploy)
 
 		# Setup the deployment file
-		cmd = "sed
-		's/%%HOST%%/%s/;s/%%OS_USERNAME%%/%s/;s/%%OS_PASSWORD%%/%s/;s/%%OS_TENANT%%/%s/;s/%%OS_REGION%%/%s/' deployment_existing.json.sample > deployment_existing.json" % (self.config['os-controllers'][0],
+		cmd = "sed 's/%%HOST%%/%s/;s/%%OS_USERNAME%%/%s/;s/%%OS_PASSWORD%%/%s/;s/%%OS_TENANT%%/%s/;s/%%OS_REGION%%/%s/' deployment_existing.json.sample > deployment_existing.json" % (self.config['os-controllers'][0],
 				self.config['os-username'],
 				self.config['os-password'],
 				self.config['os-tenant'],
@@ -173,6 +172,7 @@ class rally_g5k(Engine):
 		
 		EX5.wait_oar_job_start(self.job_id, self.site)
 
+		pp(EX5.get_oar_job_nodes(self.job_id, self.site))
 		return EX5.get_oar_job_nodes(self.job_id, self.site)[0]
 
 
@@ -185,7 +185,7 @@ class rally_g5k(Engine):
 					style.host(self.config['cluster']).rjust(5))
 
 		planning = funk.get_planning(elements)
-		slots = funk.get_slots(planning, walltime=self.config['walltime'].encode('ascii', 'ignore'), blacklisted=EXCLUDED_ELEMENTS)
+		slots = funk.compute_slots(planning, walltime=self.config['walltime'].encode('ascii', 'ignore'), excluded_elements=EXCLUDED_ELEMENTS)
 
 		startdate, enddate, resources = funk.find_free_slot(slots, elements)
 		resources = funk.distribute_hosts(resources, elements, EXCLUDED_ELEMENTS)
