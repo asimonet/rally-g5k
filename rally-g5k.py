@@ -25,8 +25,16 @@ EXCLUDED_ELEMENTS = []
 # Shortcut
 funk = EX5.planning
 
+# Default values
 default_job_name = 'Rally'
 job_path = "/root/"
+
+defaults = {}
+defaults['env_user'] = 'ansimonet'
+defaults['os-region'] = 'RegionOne'
+defaults['os-user-domain'] = 'default'
+defaults['os-admin-domain'] = 'default'
+defaults['os-project-domain'] = 'default'
 
 class rally_g5k(Engine):
 
@@ -62,6 +70,12 @@ class rally_g5k(Engine):
 			t, value, tb = sys.exc_info()
 			print str(t) + " " + str(value)
 			exit(3)
+
+		# Put default values
+		for key in defaults:
+			if not key in self.config['authentication'] or self.config['authentication'][key] == "":
+				self.config['authentication'][key] = defaults[key]
+				logger.info("Using default value '%s' for '%s'" % (self.config['authentication'][key], key))
 
 		try:
 			# Retrieving the host for the experiment
@@ -115,6 +129,7 @@ class rally_g5k(Engine):
 				
 		exit()
 	
+
 	def setup_host(self):
 		"""Deploy operating setup active data on the service node and
 		Hadoop on all"""
@@ -122,16 +137,23 @@ class rally_g5k(Engine):
 		logger.info('Deploying environment %s on %s' % (style.emph(self.config['env_name']), self.host) +
 				(' (forced)' if self.options.force_deploy else ''))
 
-		deployed_hosts, _ = EX5.deploy(EX5.Deployment(hosts=[self.host],
-										  env_name=self.config['env_name']),
-										  check_deployed_command=not self.options.force_deploy)
+		deployment = None
+		if 'env_user' not in self.config or self.config['env_user'] == '':
+			deployment = EX5.Deployment(hosts=[self.host], env_name=self.config['env_name'])
+		else:
+			deployment = EX5.Deployment(hosts=[self.host], env_name=self.config['env_name'],
+				user=self.config['env_user'])
+
+		deployed_hosts, _ = EX5.deploy(deployment, check_deployed_command=not self.options.force_deploy)
 
 		# Setup the deployment file
-		cmd = "sed 's/%%HOST%%/%s/;s/%%OS_USERNAME%%/%s/;s/%%OS_PASSWORD%%/%s/;s/%%OS_TENANT%%/%s/;s/%%OS_REGION%%/%s/' deployment_existing.json.sample > deployment_existing.json" % (self.config['os-controllers'][0],
-				self.config['os-username'],
-				self.config['os-password'],
-				self.config['os-tenant'],
-				self.config['os-region'])
+		cmd = 'sed \''
+		for key in self.config['authentication']:
+			cmd += "s/#%s#/%s/; " % (key, self.config['authentication'][key])
+
+		cmd += "s/#HOST#/%s/; " % self.config['os-controllers'][0]
+		cmd += "s/#OS_REGION#/%s/; " % self.config['authentication']['os-region']
+		cmd += "' deployment_existing.json.sample > deployment_existing.json"
 
 		self._run_or_abort(cmd,
 				self.host,
