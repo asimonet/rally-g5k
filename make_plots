@@ -1,8 +1,9 @@
 #! /usr/bin/env ruby
 
-require('optparse')
-require('json')
-require('erb')
+require 'optparse'
+require 'json'
+require 'erb'
+require 'command_line_reporter'
 
 # Parse the command line arguments
 optparse = OptionParser.new do |opts|
@@ -15,130 +16,232 @@ optparse = OptionParser.new do |opts|
 end
 optparse.parse!
 
+# A Plotter takes all experiment data in an Execo result dir and
+# plots various results.
+# A new Plotter is necessary for each result dir
 class Plotter
-	attr_reader :controllers, :computes, :title, :x_label, :y_label
+	include CommandLineReporter
+	
+	attr_reader :controllers, :computes, :title, :x_label, :y_label, :nodes
 
-	def initialize()
+	def initialize(dir)
+		@result_dir		= dir
+		begin
+			json_path = File.join(dir, 'experiment.json')
+			@experiment		= JSON.load(File.read(json_path))
+			@experiment['nodes']['services'].each { |r, s| @experiment['nodes']['services'][r] = s[/\w+\-\d+/] }
+			@experiment['nodes']['computes'].map!   { |c| c[/\w+\-\d+/] }
+		rescue => details
+			STDERR.puts "Could not load #{json_path}: #{details.to_s}"
+		end
+
 		@controllers	= nil
-		@nodes			= nil
+		@nodes = @experiment['nodes']['services'].keys + @experiment['nodes']['computes']
+
 		@source			= nil
 		@title			= nil
 		@x_label			= nil
 		@y_label			= nil
+
+		@averages		= {}
+	end
+
+	# Write the headers for a CVS file
+	#
+	#  == Parameters:
+	#  file: the open file to write to
+	def write_headers(file)
+		# Write the header
+		file.write "Time\t"
+		#@experiment['nodes']['services'].keys.each  { |s| file.write "\t,#{s}" }
+		#@experiment['nodes']['computes'].each { |c| file.write "\t,#{c}" }
+		@nodes.each { |n| file.write "\t,#{n}"}
+		file.write "\n"
+	end
+
+	def error?(xp)
+		!xp['error'].nil?
 	end
 
 	# Walks into a directory and looks for JSON files to extract
 	# energy data.
 	#
 	# == Parameters:
-	# dir::
-	#   the path of the directory to explore
-	def walk(dir)
-		headers = generate_headers(dir)
+	def walk()
+		[ 'plots', 'scripts', 'csv' ].each do |dir|
+			dir = File.join(@result_dir, dir)
+			Dir.mkdir dir if !File.exist? dir
+		end
 
+		dir = File.join(@result_dir, 'energy')
 		Dir.foreach(dir) do |file|
 			next if ['.', '..', 'config.json'].include?(file)
 			next unless file.end_with? '.json'
 
-			file = generate_data(File.join(dir, file), headers)
-			plot = generate_plot(file, headers)
+			file = File.basename(file, File.extname(file))
+			generate_data(File.join(dir, file))
+			generate_plot(File.join(dir, file), 'raw')
+			generate_plot(File.join(dir, file), 'corrected')
 		end
-	end
-
-	# Initialize the data structure that will hold the energy
-	# metrics. This method looks for a config.json file in the
-	# given directory and gets the names of nodes from there.
-	#
-	# == Parameters:
-	# dir::
-	#   the directory from which the headers must be acquired
-	# 
-	# == Returns:
-	# A Array containing OpenStack controllers and compute nodes.
-	def generate_headers(dir)
-		config = JSON.parse(File.read(File.join(dir, 'config.json')))
-		headers						= {}
-		headers[:controllers]	= {}
-		headers[:computes] 		= {}
-
-		config['os-controllers'].each { |c| headers[:controllers][c[/\w+\-\d+/]] = {} }
-		config['os-computes'].each { |c| headers[:computes][c[/\w+\-\d+/]] = {} }
-
-		return headers
 	end
 
 	# Extract metrics from a JSON file and writes them to a CSV file.
 	#
 	# == Parameters:
-	# file::
-	#   the file to extract metrics from
-	# headers::
-	#   an Array containing the controllers and compute nodes
-	#
-	# == Returns:
-	# A String containing the path to the files where the CSV data has been
-	# written.
-	def generate_data(file, headers)
-		data = headers.dup
+	# filename::
+	#   the basename of file to extract metrics from
+	def generate_data(filename)
+		# This hash will contain all the values indexed by timestamp
+		values = {}
+		corrected = {}
 
-		js = JSON.parse(File.read(file).gsub(/u'([^\']*)'/, '"\1"'))
-		data[:timestamps] = js['items'][0]['timestamps'].map {|val| val.to_i }
-		
+		js = JSON.parse(File.read(filename + '.json'))
+		js_file = File.basename(filename) + '.json'
+		@averages[js_file] = {}
+		stats = @experiment['benchmarks'][js_file]
+
+		# This code is overly coreful in case all series do not all have the
+		# same timestamps
 		js['items'].each do |serie|
 			host = serie['uid']
+			sum_before	= 0
+			sum_after	= 0
+			sum_all		= 0
+			n_before		= 0
+			n_after		= 0
+			n_all			= 0
 
-			if data[:controllers].include? host then
-				data[:controllers][host] = serie['values']
-			else
-				data[:computes][host] = serie['values']
+			# Get the raw series
+			serie['timestamps'].each_index do |i|
+				t = serie['timestamps'][i].to_i
+				s = t - stats['idle_start']
+
+				values[s] = {} if values[s].nil?
+				values[s][host] = serie['values'][i].to_i
+
+				if t < stats['run_start'] then
+					sum_before += serie['values'][i].to_i 
+					n_before += 1
+				end
+
+				if t > stats['run_end'] then
+					sum_after += serie['values'][i].to_i 
+					n_after += 1
+				end
+			end
+
+			# Compute the corrected series by substracting the average idle to the values
+			sum_all = sum_before + sum_after
+			n_all = n_before + n_after
+
+			@averages[js_file][host] = {}
+			@averages[js_file][host][:before]	= if n_before == 0 then "NAN" else sum_before / n_before end
+			@averages[js_file][host][:after]		= if n_after  == 0 then "NAN" else sum_after  / n_after end
+			@averages[js_file][host][:all]		= if n_all    == 0 then "NAN" else sum_all    / n_all end
+
+			serie['timestamps'].each_index do |i|
+				s = serie['timestamps'][i].to_i - stats['idle_start']
+
+				corrected[s] = {} if corrected[s].nil?
+				corrected[s][host] = serie['values'][i].to_i - @averages[js_file][host][:before]
 			end
 		end
 
-		dir = File.dirname(file)
-		name = File.basename(file, '.json') + '.csv'
-		file = File.new(File.join(dir, name), 'w')
+		# Write the raw values to a first file
+		name = File.basename(filename) + '_raw.csv'
+		file = File.new(File.join(@result_dir, 'csv', name), 'w')
+		write_headers(file)
 
-		file.write 'Time'
-		#headers[:controllers].each_key { |key| file.write ",\t#{key}" }
-		headers[:computes].each_key    { |key| file.write ",\t'#{key}'" }
-		file.write "\n"
+		values.each do |t, row|
+			file.write t.to_s
+			@experiment['nodes']['services'].values.each { |h| file.write ",\t#{row[h]}" }
+			@experiment['nodes']['computes'].each { |c| file.write ",\t#{row[c]}" }
+			file.write "\n"
+		end
+		file.close()
 
-		data[:timestamps].each_index do |i|
+		# Write the corrected values to another file
+		name = File.basename(filename) + '_corrected.csv'
+		file = File.new(File.join(@result_dir, 'csv', name), 'w')
+		write_headers(file)
 
-			file.write data[:timestamps][i]
-			#data[:controllers].each_value { |c| file.write ",\t#{c[i]}" }
-			data[:computes].each_value    { |c| file.write ",\t#{c[i]}" }
+		corrected.each do |t, row|
+			file.write t.to_s
+			@experiment['nodes']['services'].values.each { |h| file.write ",\t#{row[h]}" }
+			@experiment['nodes']['computes'].each { |c| file.write ",\t#{row[c]}" }
 			file.write "\n"
 		end
 
 		file.close
-		return file.path
 	end
 
-	def generate_plot(file, headers)
+	def generate_plot(filename, what)
+		basename = File.basename filename
+
 		# Let's write a R script
 		renderer = ERB.new(File.read('template/energy.erb'))
-		@source = file
-		@nodes = headers[:computes].keys
-		@title = 'Energy consumption of compute nodes'
-		@x_label = 'Time (sec)'
-		@y_label = 'Energy (watt)'
+
+		# Input/output
+		@source = File.join(@result_dir, 'csv', "#{basename}_#{what}.csv")
+		@output = File.join(@result_dir, 'plots', "#{basename}_#{what}.pdf")
+
+		# Values
+		@title	= basename
+		@x_label	= 'Time (sec)'
+		@y_label	= 'Energy (watt)'
+
+		# Straight lines to show start/end
+		times = @experiment['benchmarks'][File.basename(filename) + '.json']
+		@idle_start	= 0
+		@idle_end	= times['idle_end']	- times['idle_start']
+		@run_start	= times['run_start']	- times['idle_start']
+		@run_end		= times['run_end']	- times['idle_start']
+
+		# Write the script
+		dir = File.join(@result_dir, 'scripts')
 
 		script = renderer.result(binding)
-
-		dir = File.dirname(file)
-		name = File.basename(file, '.csv') + '.r'
-		file = File.new(File.join(dir, name), 'w')
+		file = File.new(File.join(dir, "#{basename}_#{what}.plt"), 'w')
 		file.write(script)
 		file.close
 
-		system "/usr/bin/env Rscript #{file.path}"
+		# Run it
+		puts "Running #{File.absolute_path(file)}"
+		system "/usr/bin/env gnuplot #{file.path}"
+	end
+
+	def print_averages(node)
+		max_len = @experiment['benchmarks'].select {|name, xp| !error? xp }.keys.map {|b| File.basename(b).size }.reduce { |max, current|
+			if current > max then
+				current
+			else
+				max
+			end
+		}
+
+		header :title => "Idle power comsumption (average) before and aftear each task, for #{node}", :align => 'center'
+		table(:border => true) do
+			row do
+				column 'Benchmark', :width => max_len
+				column 'Before', :align => 'right'
+				column 'After', :align => 'right'
+				column 'All', :align => 'right'
+			end
+			@averages.each do |b, values|
+				row do
+					column b, :align => 'left'
+					column values[node][:before].to_s
+					column values[node][:after].to_s
+					column values[node][:all].to_s
+				end
+			end
+		end
 	end
 end
 
 ARGV.each do |dir|
-	plotter = Plotter.new()
-	plotter.walk dir
+	plotter = Plotter.new(dir)
+	plotter.walk
+	#plotter.print_averages 'taurus-9'
 end
-
 
