@@ -1,0 +1,16 @@
+{
+    "type": "ExistingCloud",
+    "auth_url": "http://{{controller}}:5000/v3/",
+    "region_name": "{{os_region}}",
+    "endpoint_type": "public",
+    "admin": {
+        "username": "{{os_username}}",
+        "password": "{{os_password}}",
+        "project_name": "{{os_tenant}}",
+        "user_domain_name": "{{os_user_domain}}",
+        "admin_domain_name": "{{os_admin_domain}}",
+        "project_domain_name": "{{os_project_domain}}"
+    },
+    "https_insecure": false,
+    "https_cacert": ""
+}

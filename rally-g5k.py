@@ -7,6 +7,9 @@ pp = pprint.PrettyPrinter(indent=4).pprint
 from time import sleep
 import json
 import re
+import tempfile
+
+import jinja2
 
 import execo as EX
 from string import Template
@@ -28,6 +31,7 @@ funk = EX5.planning
 # Default values
 default_job_name = 'Rally'
 job_path = "/root/"
+RALLY_INSTALL_URL = 'https://raw.githubusercontent.com/openstack/rally/master/install_rally.sh'
 
 # Time to wait before and after running a benchmark (seconds)
 idle_time = 30
@@ -173,17 +177,18 @@ class rally_g5k(Engine):
 			self.tear_down()
 
 			# Write info about the benchmarks to experiment.json
-			out_path = os.path.join(self.result_dir, 'experiment.json')
-			experiment['nodes'] = {}
-			experiment['nodes']['services'] = self.config['os-services']
-			experiment['nodes']['computes'] = self.config['os-computes']
-			experiment['end'] = int(time.time())
-			experiment['benchmarks'] = benchmarks
+			if self.rally_deployed:
+				out_path = os.path.join(self.result_dir, 'experiment.json')
+				experiment['nodes'] = {}
+				experiment['nodes']['services'] = self.config['os-services']
+				experiment['nodes']['computes'] = self.config['os-computes']
+				experiment['end'] = int(time.time())
+				experiment['benchmarks'] = benchmarks
 
-			with open(out_path, 'w') as f:
-				f.write(json.dumps(experiment, indent=3))
+				with open(out_path, 'w') as f:
+					f.write(json.dumps(experiment, indent=3))
 
-			logger.info("Wrote " + out_path)
+				logger.info("Wrote " + out_path)
 
 		exit()
 
@@ -204,20 +209,51 @@ class rally_g5k(Engine):
 
 		deployed_hosts, _ = EX5.deploy(deployment, check_deployed_command=not self.options.force_deploy)
 
+		# Test if rally is installed
+		test_p = EX.SshProcess('rally version', self.host, {'user': 'root'})
+		test_p.run()
+
+		if test_p.exit_code != 0:
+			# Install rally
+			self._run_or_abort("curl -sO %s" % RALLY_INSTALL_URL, self.host,
+				"Could not download Rally install script from %s" % RALLY_INSTALL_URL,
+				conn_params={'user': 'root'})
+
+			logger.info("Updating packages on deployed host")
+			self._run_or_abort('apt-get update && apt-get -y update', self.host,
+				'Could not update packages on host',
+				conn_params={'user': 'root'})
+			
+			self._run_or_abort('apt-get -y install python-pip', self.host,
+				'Could not install pip on host',
+				conn_params={'user': 'root'})
+			self._run_or_abort('pip install --upgrade setuptools', self.host,
+				'Could not upgrade setuptools',
+				conn_params={'user': 'root'})
+
+			self._run_or_abort("bash install_rally.sh -y --url %s" %
+				self.config['rally-git'], self.host, 'Could not install Rally on host',
+				conn_params={'user': 'root'})
+		else:
+			logger.info("Rally %s is already installed" % test_p.stdout.rstrip())
+
 		# Setup the deployment file
-		cmd = 'sed \''
-		for key in self.config['authentication']:
-			cmd += "s/#%s#/%s/; " % (key, self.config['authentication'][key])
+		vars = {
+			"controller": self.config['os-services']['controller'],
+			"os_region": self.config['authentication']['os-region'],
+			"os_username": self.config['authentication']['os-username'],
+			"os_password": self.config['authentication']['os-password'],
+			"os_tenant": self.config['authentication']['os-tenant'],
+			"os_user-domain": self.config['authentication']['os-user-domain'],
+			"os_admin-domain": self.config['authentication']['os-admin-domain'],
+			"os_project-domain": self.config['authentication']['os-project-domain']
+		}
+		rally_deployment = self._render_template('templates/deployment_existing.json', vars)
+		EX.Put([self.host], [rally_deployment],
+			remote_location='deployment_existing.json',
+			connection_params={'user': 'root'}).run()
 
-		cmd += "s/#HOST#/%s/; " % self.config['os-services']['controller']
-		cmd += "s/#OS_REGION#/%s/; " % self.config['authentication']['os-region']
-		cmd += "' deployment_existing.json.sample > deployment_existing.json"
-
-		self._run_or_abort(cmd,
-				self.host,
-				'Could not write the deployment file, aborting.', conn_params={'user': 'root'})
-
-		# Deploy Rally
+		# Create a Rally deployment
 		self._run_or_abort("rally deployment create --filename deployment_existing.json "
 				"--name %s" % self.config['deployment_name'], self.host, 'Could not create the Rally deployment',
 				conn_params={'user': 'root'})
@@ -391,7 +427,17 @@ class rally_g5k(Engine):
 
 		logger.info("Wrote " + f.name)
 
-		 
+	def _render_template(self, template_path, vars):
+		template_loader = jinja2.FileSystemLoader(searchpath='.')
+		template_env = jinja2.Environment(loader=template_loader)
+		template = template_env.get_template(template_path)
+		
+		f = tempfile.NamedTemporaryFile('w', delete=False)
+		f.write(template.render(vars))
+		f.close()
+		
+		return f.name
+
 	def _run_or_abort(self, cmd, host, error_message, tear_down=True, conn_params=None):
 		"""Attempt to run a command on the given host. If the command fails,
 		error_message and the process error output will be printed.
