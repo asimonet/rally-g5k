@@ -4,6 +4,12 @@ require 'optparse'
 require 'json'
 require 'erb'
 require 'command_line_reporter'
+require 'colorize'
+require 'descriptive-statistics'
+
+def error(message)
+	STDERR.puts message.red
+end
 
 # Parse the command line arguments
 optparse = OptionParser.new do |opts|
@@ -22,28 +28,73 @@ optparse.parse!
 class Plotter
 	include CommandLineReporter
 	
-	attr_reader :controllers, :computes, :title, :x_label, :y_label, :nodes
+	attr_reader :computes, :title, :x_label, :y_label, :nodes, :roles, :range
 
 	def initialize(dir)
 		@result_dir		= dir
 		begin
 			json_path = File.join(dir, 'experiment.json')
 			@experiment		= JSON.load(File.read(json_path))
-			@experiment['nodes']['services'].each { |r, s| @experiment['nodes']['services'][r] = s[/\w+\-\d+/] }
+			@experiment['nodes']['services'].each {
+				|r, s| @experiment['nodes']['services'][r] = s[/\w+\-\d+/]
+			}
 			@experiment['nodes']['computes'].map!   { |c| c[/\w+\-\d+/] }
 		rescue => details
-			STDERR.puts "Could not load #{json_path}: #{details.to_s}"
+			error("Could not load #{json_path}: #{details.to_s}")
 		end
 
-		@controllers	= nil
-		@nodes = @experiment['nodes']['services'].keys + @experiment['nodes']['computes']
+		# Store the hosts and their role
+		@roles = @experiment['nodes']['services'].keys \
+			+ @experiment['nodes']['computes']
+		@nodes = @experiment['nodes']['services'].values \
+			+ @experiment['nodes']['computes']
+		@computes = @experiment['nodes']['computes']
+
+		# Read the energy data once now
+		@energy_data = {}
+
+		Dir.foreach(File.join(dir, 'energy')) do |filename|
+			next if ['.', '..'].include? filename
+
+			host = filename[/(\w+\-\d+)\.dat/, 1]
+			File.open(File.join(dir, 'energy', filename)) do |file|
+				line = file.gets # header
+				while line = file.gets do
+					values = line.split ' '
+					t = values[1].to_i
+
+					@energy_data[t] = {} if @energy_data[t].nil?
+					@energy_data[t][host] = values[2].to_f
+				end
+			end
+		end
+
+		if @energy_data.empty? then
+			url = "https://intranet.grid5000.fr/supervision/lyon/wattmetre/formulaire.php"
+			error("No data in #{File.join(dir, 'energy')}")
+			error("Please download them from #{url}")
+			exit(1)
+		end
+
+		puts "Read #{@energy_data.size} values for " \
+			+ "#{@energy_data.first[1].keys.size} machines"
 
 		@source			= nil
 		@title			= nil
 		@x_label			= nil
 		@y_label			= nil
+		@range			= nil
 
 		@averages		= {}
+		@stats			= {}
+	end
+
+	def role2host(role)
+		if !@experiment['nodes']['services'][role].nil? then
+			@experiment['nodes']['services'][role]
+		else
+			role
+		end
 	end
 
 	# Write the headers for a CVS file
@@ -53,9 +104,7 @@ class Plotter
 	def write_headers(file)
 		# Write the header
 		file.write "Time\t"
-		#@experiment['nodes']['services'].keys.each  { |s| file.write "\t,#{s}" }
-		#@experiment['nodes']['computes'].each { |c| file.write "\t,#{c}" }
-		@nodes.each { |n| file.write "\t,#{n}"}
+		@roles.each { |n| file.write "\t,#{n}"}
 		file.write "\n"
 	end
 
@@ -73,145 +122,176 @@ class Plotter
 			Dir.mkdir dir if !File.exist? dir
 		end
 
-		dir = File.join(@result_dir, 'energy')
-		Dir.foreach(dir) do |file|
-			next if ['.', '..', 'config.json'].include?(file)
-			next unless file.end_with? '.json'
+		# Loop through all the Rally tasks, analyze those that didn't fail.
+		benchmarks = @experiment['benchmarks']
+		benchmarks.each_key do |bench_json|
+			bench = benchmarks[bench_json]
+			bench_name = File.basename(bench_json, '.json')
 
-			file = File.basename(file, File.extname(file))
-			generate_data(File.join(dir, file))
-			generate_plot(File.join(dir, file), 'raw')
-			generate_plot(File.join(dir, file), 'corrected')
+			if bench['error'].nil? then
+				if generate_data(bench_name, bench) then
+					generate_plot(bench_name, bench, 'raw')
+					generate_plot(bench_name, bench, 'corrected')
+				end
+			else
+				error("Task #{bench_json} failed")
+			end
 		end
 	end
 
-	# Extract metrics from a JSON file and writes them to a CSV file.
+	# Extract metrics from the large CSV file and writes them to a smaller, task
+	# specific CSV file.
 	#
 	# == Parameters:
 	# filename::
 	#   the basename of file to extract metrics from
-	def generate_data(filename)
-		# This hash will contain all the values indexed by timestamp
-		values = {}
+	def generate_data(bench_name, bench)
+		# Quickly check we have the energy metrics for this task
+		if bench['idle_start'] < @energy_data.keys.first \
+				or bench['idle_end'] > @energy_data.keys.last then
+			error("The energy metrics do not cover the whole period of #{bench_name} task")
+			return false
+		end
+
+		# This hash will contain all the raw indexed by timestamp
+		raw = {}
 		corrected = {}
 
-		js = JSON.parse(File.read(filename + '.json'))
-		js_file = File.basename(filename) + '.json'
-		@averages[js_file] = {}
-		stats = @experiment['benchmarks'][js_file]
-
-		# This code is overly coreful in case all series do not all have the
-		# same timestamps
-		js['items'].each do |serie|
-			host = serie['uid']
-			sum_before	= 0
-			sum_after	= 0
-			sum_all		= 0
-			n_before		= 0
-			n_after		= 0
-			n_all			= 0
+		bench_energy = @energy_data.select {
+			|k, v| (k > bench['idle_start']) and (k < bench['idle_end'])
+		}
+		@averages[bench_name] = {}
+		@stats[bench_name]    = {}
+		
+		@nodes.each do |host|
+			before = []
+			after  = []
 
 			# Get the raw series
-			serie['timestamps'].each_index do |i|
-				t = serie['timestamps'][i].to_i
-				s = t - stats['idle_start']
+			bench_energy.each_key do |timestamp|
+				t = timestamp.to_i
+				s = t - bench['idle_start']
 
-				values[s] = {} if values[s].nil?
-				values[s][host] = serie['values'][i].to_i
+				raw[s] = {} if raw[s].nil?
+				raw[s][host] = bench_energy[timestamp][host]
 
-				if t < stats['run_start'] then
-					sum_before += serie['values'][i].to_i 
-					n_before += 1
+				# Record the baseline before and after
+				if t < bench['run_start'] then
+					before << bench_energy[timestamp][host]
 				end
 
-				if t > stats['run_end'] then
-					sum_after += serie['values'][i].to_i 
-					n_after += 1
+				if t > bench['run_end'] then
+					after << bench_energy[timestamp][host]
 				end
 			end
 
-			# Compute the corrected series by substracting the average idle to the values
-			sum_all = sum_before + sum_after
-			n_all = n_before + n_after
+			# Compute some statistics
+			@stats[bench_name][host] = {} if @stats[bench_name][host].nil?
+			@stats[bench_name][host][:avg] = {}
+			@stats[bench_name][host][:stddev] = {}
 
-			@averages[js_file][host] = {}
-			@averages[js_file][host][:before]	= if n_before == 0 then "NAN" else sum_before / n_before end
-			@averages[js_file][host][:after]		= if n_after  == 0 then "NAN" else sum_after  / n_after end
-			@averages[js_file][host][:all]		= if n_all    == 0 then "NAN" else sum_all    / n_all end
+			stats = DescriptiveStatistics::Stats.new before
+			@stats[bench_name][host][:avg][:before]		= stats.mean
+			@stats[bench_name][host][:stddev][:before]	= stats.standard_deviation
 
-			serie['timestamps'].each_index do |i|
-				s = serie['timestamps'][i].to_i - stats['idle_start']
+			stats = DescriptiveStatistics::Stats.new after
+			@stats[bench_name][host][:avg][:after]		= stats.mean
+			@stats[bench_name][host][:stddev][:after]	= stats.standard_deviation
+
+			stats = DescriptiveStatistics::Stats.new before + after
+			@stats[bench_name][host][:avg][:all]		= stats.mean
+			@stats[bench_name][host][:stddev][:all]	= stats.standard_deviation
+
+			# Compute the corrected series by substracting
+			# the average idle to the raw
+			bench_energy.each_key do |timestamp|
+				s = timestamp - bench['idle_start']
 
 				corrected[s] = {} if corrected[s].nil?
-				corrected[s][host] = serie['values'][i].to_i - @averages[js_file][host][:before]
+				corrected[s][host] = bench_energy[timestamp][host] \
+					- @stats[bench_name][host][:avg][:before]
 			end
 		end
 
 		# Write the raw values to a first file
-		name = File.basename(filename) + '_raw.csv'
-		file = File.new(File.join(@result_dir, 'csv', name), 'w')
+		name = bench_name + '_raw.csv'
+		path = File.join(@result_dir, 'csv', name)
+		file = File.new(path, 'w')
 		write_headers(file)
 
-		values.each do |t, row|
+		raw.each do |t, row|
 			file.write t.to_s
-			@experiment['nodes']['services'].values.each { |h| file.write ",\t#{row[h]}" }
-			@experiment['nodes']['computes'].each { |c| file.write ",\t#{row[c]}" }
+			@roles.each { |role| file.write ",\t#{row[role2host(role)]}" }
 			file.write "\n"
 		end
 		file.close()
+		puts "Wrote #{path.green}"
 
 		# Write the corrected values to another file
-		name = File.basename(filename) + '_corrected.csv'
-		file = File.new(File.join(@result_dir, 'csv', name), 'w')
+		name = bench_name + '_corrected.csv'
+		path = File.join(@result_dir, 'csv', name)
+		file = File.new(path, 'w')
 		write_headers(file)
 
 		corrected.each do |t, row|
 			file.write t.to_s
-			@experiment['nodes']['services'].values.each { |h| file.write ",\t#{row[h]}" }
-			@experiment['nodes']['computes'].each { |c| file.write ",\t#{row[c]}" }
+			@roles.each { |role| file.write ",\t#{row[role2host(role)]}" }
 			file.write "\n"
 		end
 
 		file.close
+		puts "Wrote #{path.green}"
+
+		true
 	end
 
-	def generate_plot(filename, what)
-		basename = File.basename filename
-
+	def generate_plot(bench_name, bench, what)
 		# Let's write a R script
-		renderer = ERB.new(File.read('template/energy.erb'))
+		renderer = ERB.new(File.read('templates/energy.erb'))
 
 		# Input/output
-		@source = File.join(@result_dir, 'csv', "#{basename}_#{what}.csv")
-		@output = File.join(@result_dir, 'plots', "#{basename}_#{what}.pdf")
+		@source = File.join(@result_dir, 'csv', "#{bench_name}_#{what}.csv")
+		@output = File.join(@result_dir, 'plots', "#{bench_name}_#{what}.pdf")
 
 		# Values
-		@title	= basename
+		@title	= bench_name
 		@x_label	= 'Time (sec)'
 		@y_label	= 'Energy (watt)'
 
+		# Range
+		if what == 'raw' then
+			@range = [85, 125]
+		else
+			#@range = [-15, 30]
+		end
+
 		# Straight lines to show start/end
-		times = @experiment['benchmarks'][File.basename(filename) + '.json']
 		@idle_start	= 0
-		@idle_end	= times['idle_end']	- times['idle_start']
-		@run_start	= times['run_start']	- times['idle_start']
-		@run_end		= times['run_end']	- times['idle_start']
+		@idle_end	= bench['idle_end']	- bench['idle_start']
+		@run_start	= bench['run_start']	- bench['idle_start']
+		@run_end		= bench['run_end']	- bench['idle_start']
 
 		# Write the script
 		dir = File.join(@result_dir, 'scripts')
 
 		script = renderer.result(binding)
-		file = File.new(File.join(dir, "#{basename}_#{what}.plt"), 'w')
+		path = File.join(dir, "#{bench_name}_#{what}.plt")
+		file = File.new(path, 'w')
 		file.write(script)
 		file.close
 
 		# Run it
-		puts "Running #{File.absolute_path(file)}"
-		system "/usr/bin/env gnuplot #{file.path}"
+		if system "/usr/bin/env gnuplot #{file.path}" then
+			puts "Executed #{path.green} successfully"
+		else
+			puts "Execution of #{path.green} failed"
+		end
 	end
 
 	def print_averages(node)
-		max_len = @experiment['benchmarks'].select {|name, xp| !error? xp }.keys.map {|b| File.basename(b).size }.reduce { |max, current|
+		max_len = @experiment['benchmarks'].select {
+			|name, xp| !error? xp }.keys.map {|b| File.basename(b).size
+		}.reduce { |max, current|
 			if current > max then
 				current
 			else
@@ -219,20 +299,27 @@ class Plotter
 			end
 		}
 
-		header :title => "Idle power comsumption (average) before and aftear each task, for #{node}", :align => 'center'
+		header :title => "Idle power comsumption (average and stddev) before and aftear each task, for #{node}", :align => 'center'
 		table(:border => true) do
 			row do
 				column 'Benchmark', :width => max_len
-				column 'Before', :align => 'right'
-				column 'After', :align => 'right'
-				column 'All', :align => 'right'
+				column 'Before', :align => 'right', :width => 14
+				column 'After', :align => 'right', :width => 14
+				column 'All', :align => 'right', :width => 14
 			end
-			@averages.each do |b, values|
+			@stats.each do |b, bench|
+				avg_before		= bench[node][:avg][:before].round(2)
+				avg_after		= bench[node][:avg][:after].round(2)
+				avg_all			= bench[node][:avg][:all].round(2)
+				stddev_before	= bench[node][:stddev][:before].round(2)
+				stddev_after	= bench[node][:stddev][:after].round(2)
+				stddev_all		= bench[node][:stddev][:all].round(2)
+
 				row do
 					column b, :align => 'left'
-					column values[node][:before].to_s
-					column values[node][:after].to_s
-					column values[node][:all].to_s
+					column "#{avg_before} (±#{stddev_before})"
+					column "#{avg_after} (±#{stddev_after})"
+					column "#{avg_all} (±#{stddev_all})"
 				end
 			end
 		end
@@ -242,6 +329,6 @@ end
 ARGV.each do |dir|
 	plotter = Plotter.new(dir)
 	plotter.walk
-	#plotter.print_averages 'taurus-9'
+	#plotter.print_averages plotter.nodes[0]
 end
 

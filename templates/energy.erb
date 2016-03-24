@@ -1,0 +1,67 @@
+set terminal pdf linewidth 3 size 6,3 enhanced color font ',9'
+set termoption dash
+
+set out "<%= @output %>"
+#set multiplot layout <%= @nodes.size+ 1 %>,1
+
+# Range
+<% if !@range.nil? %>
+set yrange [<%= @range[0] %>:<%= @range[1] %>]
+<% end %>
+
+# Line types
+set style line 1 lt 1 lw 0.6 pt 15 lc rgbcolor '#CC5496'
+set style line 2 lt 1 lw 0.6 pt 7 lc rgb "blue"
+set style line 3 lt 1 lw 0.6 pt 13 lc rgbcolor "#259400" # green
+set style line 4 lt 1 lw 0.6 pt 9 lc rgb "violet"
+set style line 5 lt 1 lw 0.6 pt 5 lc rgb "red"
+
+set style line 6 lt 1 lw 0.6 pt 9 lc rgb "violet"
+set style line 7 lt 1 dt 2 lw 0.6 pt 5 lc rgb "red"
+
+set style line 20 lt 1 dt 3 lw 1.2 pt 5 lc rgb "red"
+set style line 21 lt 1 dt 3 lw 0.1 pt 5 lc rgb "#121212"
+
+# Tics and grids
+set xtics nomirror textcolor rgb "black"
+set ytics nomirror textcolor rgb "black"
+set grid ytics ls 21
+
+# Border
+set border 15 linewidth 0.5 lc rgb "gray"
+
+# Start and end of run
+set arrow from first <%= @run_start %>,graph 0 to first <%= @run_start %>,graph 1 nohead ls 20
+set arrow from first <%= @run_end %>,graph 0 to first <%= @run_end %>,graph 1 nohead ls 20
+
+# CSV
+set datafile separator ","
+
+# Legend
+set key autotitle columnhead inside top right
+
+set xlabel 'Time (sec)'
+set ylabel 'Energy (watt)'
+
+set title "<%= @title %>"
+plot "<%= @source %>"\
+	<% @nodes.size.times do |i| %>\
+		<% if i > 0 %>'' <% end %>using 1:<%= i+2 %> with lines ls <%= i + 1%>\
+		<% if i-1 < @nodes.size %>,\<% end %>
+	<% end %>
+
+unset key
+
+<% @roles.size.times do |i| %>\
+set title "<%= @title %>: <%= @roles[i] %>"
+plot "<%= @source %>" using 1:<%= i+2 %> with lines ls <%= i + 1 %>
+<% end %>
+
+# Only the computes
+set title "<%= @title %>: compute hosts"
+set key autotitle columnhead inside top right
+plot "<%= @source %>"\
+	<% @computes.size.times do |i| %>\
+		<% if i > 0 %>'' <% end %>using 1:<%= i+5 %> with lines ls <%= i + 6%>\
+		<% if i-1 < @nodes.size %>,\<% end %>
+	<% end %>
