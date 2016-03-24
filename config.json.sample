@@ -1,21 +1,24 @@
 {
 	"cluster": "sagittaire",
-	"walltime": "04:00:00",
-	"env_name": "rally-0.1.2.dev86-wheezy",
-	"env_user": "ansimonet",
+	"walltime": "02:00:00",
+	"env_name": "wheezy-x64-prod",
+	"rally-git": "https://git.openstack.org/openstack/rally",
 
 	"deployment_name": "os-rally",
-
 	"authentication": {
-		"os-tenant": "test",
-		"os-username": "test",
-		"os-password": "abc123",
-		"os-region": "",
+		"os-tenant": "openstack",
+		"os-username": "admin",
+		"os-password": "admin",
+		"os-region": "RegionOne",
 		"os-user-domain": "",
 		"os-admin-domain": "",
 		"os-project-domain": ""
 	},
 
-	"os-controllers": ["taurus-16-kavlan-4.lyon.grid5000.fr"],
-	"os-computes": ["taurus-4-kavlan-4.lyon.grid5000.fr", "taurus-2-kavlan-4.lyon.grid5000.fr"]
+	"os-services": {
+		"controller": "taurus-12.lyon.grid5000.fr",
+		"storage": "taurus-15.lyon.grid5000.fr",
+		"network": "taurus-16.lyon.grid5000.fr"
+	},
+	"os-computes": ["taurus-4.lyon.grid5000.fr", "taurus-9.lyon.grid5000.fr"]
 }

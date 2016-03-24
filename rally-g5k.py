@@ -7,6 +7,9 @@ pp = pprint.PrettyPrinter(indent=4).pprint
 from time import sleep
 import json
 import re
+import tempfile
+
+import jinja2
 
 import execo as EX
 from string import Template
@@ -20,7 +23,7 @@ from execo_engine import Engine, ParamSweeper, logger, sweep, sweep_stats, slugi
 #logger.setLevel(logging.ERROR)
 
 #EXCLUDED_ELEMENTS = ['paranoia-4', 'paranoia-7', 'paranoia-8']
-EXCLUDED_ELEMENTS = []
+EXCLUDED_ELEMENTS = ['sagittaire-69']
 
 # Shortcut
 funk = EX5.planning
@@ -28,6 +31,10 @@ funk = EX5.planning
 # Default values
 default_job_name = 'Rally'
 job_path = "/root/"
+RALLY_INSTALL_URL = 'https://raw.githubusercontent.com/openstack/rally/master/install_rally.sh'
+
+# Time to wait before and after running a benchmark (seconds)
+idle_time = 30
 
 defaults = {}
 defaults['env_user'] = 'ansimonet'
@@ -50,6 +57,9 @@ class rally_g5k(Engine):
 		self.options_parser.add_option("-f", "--force-deploy", dest="force_deploy", default=False,
 										action="store_true",
 										help="Deploy the node without checking if it is already deployed. (default: %(defaults)s)")
+		self.options_parser.add_option("-v", "--rally-verbose", dest="verbose", default=False,
+										action="store_true",
+										help="Make Rally produce more insightful output. (default: %(defaults))")
 
 
 	def run(self):
@@ -89,46 +99,99 @@ class rally_g5k(Engine):
 			self.rally_deployed = False
 			self.setup_host()
 			
+			# This will be useful in a bit
+			os.mkdir(os.path.join(self.result_dir, 'rally'))
+			os.mkdir(os.path.join(self.result_dir, 'energy'))
+
+			experiment = {}
+			experiment['start'] = int(time.time())
+
 			# Launch the benchmarks
+			benchmarks = {}
+			n_benchmarks = len(self.args[1:])
+			i_benchmark = 0
 			for bench_file in self.args[1:]:
 				if not os.path.isfile(bench_file):
 					logger.warn("Ignoring %s which is not a file" % bench_file)
 					continue
 
-				logger.info("Preparing benchmark " + bench_file)
+				i_benchmark += 1
+				logger.info("[%d/%d] Preparing benchmark %s" % (i_benchmark, n_benchmarks, bench_file))
 
 				# Send the benchmark description file to the host
 				EX.Put(self.host, [bench_file], connection_params={'user': 'root'}).run()
-				cmd = "rally task start " + bench_file
+
+
+				v = ''
+				if self.options.verbose:
+					v = '-d'
+				cmd = "rally %s task start %s" % (v, os.path.basename(bench_file))
 				rally_task = EX.Remote(cmd, [self.host], {'user': 'root'})
 
-				logger.info("Runing benchmark " + bench_file)
-				start = int(time.time())
+				logger.info("[%d/%d] Runing benchmark %s" % (i_benchmark, n_benchmarks, bench_file))
+
+				bench_basename = os.path.basename(bench_file)
+				benchmarks[bench_basename] = {}
+
+				benchmarks[bench_basename]['idle_start'] = int(time.time())
+				time.sleep(idle_time)
+				benchmarks[bench_basename]['run_start'] = int(time.time())
+
+				# This is it
 				rally_task.run()
-				end = int(time.time())
+
+				benchmarks[bench_basename]['run_end'] = int(time.time())
+				time.sleep(idle_time)
+				benchmarks[bench_basename]['idle_end'] = int(time.time())
 
 				if not rally_task.finished_ok:
 					logger.error("Error while running benchmark")
+					benchmarks[bench_basename]['error'] = ''
 
 					if rally_task.processes[0].stderr is not None:
 						logger.error(rally_task.processes[0].stderr)
 
+						# Try to find the reason
+						lines = rally_task.processes[0].stdout.splitlines(True)
+						for i in range(0, len(lines)):
+							if 'Task config is invalid' in lines[i]:
+								benchmarks[bench_basename]['error'] += lines[i].strip()
+
+							if 'Reason:' in lines[i]:
+								benchmarks[bench_basename]['error'] += lines[i+1].strip()
+
 					continue
 				else:
 					# Getting the results back
-					self._get_logs(bench_file)
+					self._get_logs(bench_basename)
 
 					# Get the energy consumption from the kwapi API
-					self._get_energy(bench_file, start, end)
+					#self._get_energy(bench_basename, benchmarks[bench_basename]['idle_start'], benchmarks[bench_basename]['idle_end'])
+
+				logger.info('----------------------------------------')
 		except Exception as e:
 			t, value, tb = sys.exc_info()
 			print str(t) + " " + str(value)
 			traceback.print_tb(tb)
 		finally:
 			self.tear_down()
-				
+
+			# Write info about the benchmarks to experiment.json
+			if self.rally_deployed:
+				out_path = os.path.join(self.result_dir, 'experiment.json')
+				experiment['nodes'] = {}
+				experiment['nodes']['services'] = self.config['os-services']
+				experiment['nodes']['computes'] = self.config['os-computes']
+				experiment['end'] = int(time.time())
+				experiment['benchmarks'] = benchmarks
+
+				with open(out_path, 'w') as f:
+					f.write(json.dumps(experiment, indent=3))
+
+				logger.info("Wrote " + out_path)
+
 		exit()
-	
+
 
 	def setup_host(self):
 		"""Deploy operating setup active data on the service node and
@@ -146,20 +209,51 @@ class rally_g5k(Engine):
 
 		deployed_hosts, _ = EX5.deploy(deployment, check_deployed_command=not self.options.force_deploy)
 
+		# Test if rally is installed
+		test_p = EX.SshProcess('rally version', self.host, {'user': 'root'})
+		test_p.run()
+
+		if test_p.exit_code != 0:
+			# Install rally
+			self._run_or_abort("curl -sO %s" % RALLY_INSTALL_URL, self.host,
+				"Could not download Rally install script from %s" % RALLY_INSTALL_URL,
+				conn_params={'user': 'root'})
+
+			logger.info("Updating packages on deployed host")
+			self._run_or_abort('apt-get update && apt-get -y update', self.host,
+				'Could not update packages on host',
+				conn_params={'user': 'root'})
+			
+			self._run_or_abort('apt-get -y install python-pip', self.host,
+				'Could not install pip on host',
+				conn_params={'user': 'root'})
+			self._run_or_abort('pip install --upgrade setuptools', self.host,
+				'Could not upgrade setuptools',
+				conn_params={'user': 'root'})
+
+			self._run_or_abort("bash install_rally.sh -y --url %s" %
+				self.config['rally-git'], self.host, 'Could not install Rally on host',
+				conn_params={'user': 'root'})
+		else:
+			logger.info("Rally %s is already installed" % test_p.stdout.rstrip())
+
 		# Setup the deployment file
-		cmd = 'sed \''
-		for key in self.config['authentication']:
-			cmd += "s/#%s#/%s/; " % (key, self.config['authentication'][key])
+		vars = {
+			"controller": self.config['os-services']['controller'],
+			"os_region": self.config['authentication']['os-region'],
+			"os_username": self.config['authentication']['os-username'],
+			"os_password": self.config['authentication']['os-password'],
+			"os_tenant": self.config['authentication']['os-tenant'],
+			"os_user-domain": self.config['authentication']['os-user-domain'],
+			"os_admin-domain": self.config['authentication']['os-admin-domain'],
+			"os_project-domain": self.config['authentication']['os-project-domain']
+		}
+		rally_deployment = self._render_template('templates/deployment_existing.json', vars)
+		EX.Put([self.host], [rally_deployment],
+			remote_location='deployment_existing.json',
+			connection_params={'user': 'root'}).run()
 
-		cmd += "s/#HOST#/%s/; " % self.config['os-controllers'][0]
-		cmd += "s/#OS_REGION#/%s/; " % self.config['authentication']['os-region']
-		cmd += "' deployment_existing.json.sample > deployment_existing.json"
-
-		self._run_or_abort(cmd,
-				self.host,
-				'Could not write the deployment file, aborting.', conn_params={'user': 'root'})
-
-		# Deploy Rally
+		# Create a Rally deployment
 		self._run_or_abort("rally deployment create --filename deployment_existing.json "
 				"--name %s" % self.config['deployment_name'], self.host, 'Could not create the Rally deployment',
 				conn_params={'user': 'root'})
@@ -226,7 +320,7 @@ class rally_g5k(Engine):
 		sub.walltime = self.config['walltime'].encode('ascii', 'ignore')
 		sub.name = self.options.job_name
 		
-		if not (EX5.get_cluster_attributes(self.config['cluster'])['production']):
+		if 'testing' in EX5.get_cluster_attributes(self.config['cluster'])['queues']:
 			sub.queue = 'testing'
 		
 		jobs = EX5.oarsub([(sub, site)])
@@ -260,6 +354,7 @@ class rally_g5k(Engine):
 		# Generating the HTML file
 		logger.info("Getting the results into " + self.result_dir)
 		html_file = os.path.splitext(bench_file)[0] + '.html'
+		dest = os.path.join(self.result_dir, 'rally', html_file)
 		result = EX.Remote("rally task report --out=" + html_file, [self.host], {'user': 'root'})
 		result.run()
 
@@ -270,13 +365,13 @@ class rally_g5k(Engine):
 				logger.error(result.processes[0].stderr)
 		else:
 			# Downloading the HTML file
-			EX.Get(self.host, [html_file], local_location=self.result_dir, connection_params={'user': 'root'}).run()
-			logger.info("Wrote " + os.path.join(self.result_dir, html_file))
 
-		# Get the metrics
+			EX.Get(self.host, [html_file], local_location=dest, connection_params={'user': 'root'}).run()
+			logger.info("Wrote " + dest)
+
+		# Get the metrics from Rally
 		result = EX.Remote("rally task results", [self.host], {'user': 'root'})
-		metrics_file = os.path.splitext(bench_file)[0] + '.json'
-		result.processes[0].stdout_handler = metrics_file # We simply save stdout
+		metrics_file = os.path.join(self.result_dir, 'rally', os.path.splitext(bench_file)[0] + '.json')
 		result.run()
 
 		if result.processes[0].exit_code != 0:
@@ -285,31 +380,64 @@ class rally_g5k(Engine):
 			if result.processes[0].stderr:
 				logger.error(result.processes[0].stderr)
 		else:
-			logger.info("Wrote " + os.path.join(self.result_dir, metrics_file))
+			# The json is on the standard output of the process
+			with open(metrics_file, 'w') as f:
+				f.write(result.processes[0].stdout)
+			logger.info("Wrote " + metrics_file)
 	
 	def _get_energy(self, bench_file, start, end):
 		"""Get the power consumption metrics for Kwapi
 		This call writes a single JSON file with the metrics of all the nodes."""
 
-		compute_nodes = None
-		try:
-			compute_nodes = map(lambda x: re.search(r"(\w+\-\d+)\-\w+\-\d+", x).group(1), self.config['os-computes'])
-		except AttributeError:
-			compute_nodes = map(lambda x: re.search(r"(\w+\-\d+)\.\w+\.grid5000\.fr", x).group(1), self.config['os-computes'])
+		# TODO get metrics from service nodes
+		nodes = []
+		for n in self.config['os-computes']:
+			try:
+				nodes.append(re.search(r"(\w+\-\d+)\-\w+\-\d+", n).group(1))
+			except AttributeError:
+				nodes.append(re.search(r"(\w+\-\d+)\.\w+\.grid5000\.fr", n).group(1))
 
-		url = "/sites/%s/metrics/power/timeseries/?from=%d&to=%d&only=%s" % (self.site, start, end, ','.join(compute_nodes))
+		for role, n in self.config['os-services'].items():
+			try:
+				nodes.append(re.search(r"(\w+\-\d+)\-\w+\-\d+", n).group(1))
+			except AttributeError:
+				nodes.append(re.search(r"(\w+\-\d+)\.\w+\.grid5000\.fr", n).group(1))
 
-		logger.info(url)
+		url = "/sites/%s/metrics/power/timeseries/?from=%d&to=%d&only=%s" % (self.site, start, end, ','.join(nodes))
 
 		# This call to the API must be authenticated
-		data = EX5.get_resource_attributes(url)
+		i = 0
+		while True:
+			data = EX5.get_resource_attributes(url)
+			i = i + 1
+			timestamps = data['items'][0]['timestamps']
+			time.sleep(0.2)
 
-		f = open(os.path.join(self.result_dir, os.path.splitext(bench_file)[0] + '.json'), 'w')
-		pprint.pprint(data, indent=3,  stream=f)
-		f.close()
+			if len(timestamps) > 0:
+				break
+
+		logger.info("%d attempt(s) for %s" % (i, url))
+
+		# Write the metrics from the API
+		energy_path = os.path.join(self.result_dir, 'energy', os.path.splitext(bench_file)[0] + '.json')
+		json_data = json.dumps(data, indent=3)
+
+		with open(energy_path, 'w') as f:
+			f.write(json_data)
+
 		logger.info("Wrote " + f.name)
 
-		 
+	def _render_template(self, template_path, vars):
+		template_loader = jinja2.FileSystemLoader(searchpath='.')
+		template_env = jinja2.Environment(loader=template_loader)
+		template = template_env.get_template(template_path)
+		
+		f = tempfile.NamedTemporaryFile('w', delete=False)
+		f.write(template.render(vars))
+		f.close()
+		
+		return f.name
+
 	def _run_or_abort(self, cmd, host, error_message, tear_down=True, conn_params=None):
 		"""Attempt to run a command on the given host. If the command fails,
 		error_message and the process error output will be printed.
@@ -378,6 +506,7 @@ class FileOutputHandler(ProcessOutputHandler):
 # Main
 ###################
 if __name__ == "__main__":
+	print("Execo version: " + EX._version.__version__)
 	engine = rally_g5k()
 	engine.start()
    
