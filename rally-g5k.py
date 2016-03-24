@@ -231,6 +231,7 @@ class rally_g5k(Engine):
 				'Could not upgrade setuptools',
 				conn_params={'user': 'root'})
 
+			logger.info("Installing rally from %s" % style.emph(self.self.config['rally-git']))
 			self._run_or_abort("bash install_rally.sh -y --url %s" %
 				self.config['rally-git'], self.host, 'Could not install Rally on host',
 				conn_params={'user': 'root'})
