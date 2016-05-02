@@ -88,6 +88,8 @@ class rally_g5k(Engine):
 				logger.info("Using default value '%s' for '%s'" % (self.config['authentication'][key], key))
 
 		try:
+			self.rally_deployed = False
+
 			# Retrieving the host for the experiment
 			self.host = self.get_host()
 			
@@ -96,7 +98,6 @@ class rally_g5k(Engine):
 				exit(1)
 
 			# Deploying the host and Rally
-			self.rally_deployed = False
 			self.setup_host()
 			
 			# This will be useful in a bit
@@ -211,6 +212,8 @@ class rally_g5k(Engine):
 
 		# Test if rally is installed
 		test_p = EX.SshProcess('rally version', self.host, {'user': 'root'})
+		test_p.ignore_exit_code = True
+		test_p.nolog_exit_code = True
 		test_p.run()
 
 		if test_p.exit_code != 0:
@@ -219,7 +222,7 @@ class rally_g5k(Engine):
 				"Could not download Rally install script from %s" % RALLY_INSTALL_URL,
 				conn_params={'user': 'root'})
 
-			logger.info("Updating packages on deployed host")
+			logger.info("Installing dependencies on deployed host")
 			self._run_or_abort('apt-get update && apt-get -y update', self.host,
 				'Could not update packages on host',
 				conn_params={'user': 'root'})
@@ -231,7 +234,7 @@ class rally_g5k(Engine):
 				'Could not upgrade setuptools',
 				conn_params={'user': 'root'})
 
-			logger.info("Installing rally from %s" % style.emph(self.self.config['rally-git']))
+			logger.info("Installing rally from %s" % style.emph(self.config['rally-git']))
 			self._run_or_abort("bash install_rally.sh -y --url %s" %
 				self.config['rally-git'], self.host, 'Could not install Rally on host',
 				conn_params={'user': 'root'})
@@ -245,9 +248,9 @@ class rally_g5k(Engine):
 			"os_username": self.config['authentication']['os-username'],
 			"os_password": self.config['authentication']['os-password'],
 			"os_tenant": self.config['authentication']['os-tenant'],
-			"os_user-domain": self.config['authentication']['os-user-domain'],
-			"os_admin-domain": self.config['authentication']['os-admin-domain'],
-			"os_project-domain": self.config['authentication']['os-project-domain']
+			"os_user_domain": self.config['authentication']['os-user-domain'],
+			"os_admin_domain": self.config['authentication']['os-admin-domain'],
+			"os_project_domain": self.config['authentication']['os-project-domain']
 		}
 		rally_deployment = self._render_template('templates/deployment_existing.json', vars)
 		EX.Put([self.host], [rally_deployment],
