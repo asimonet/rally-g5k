@@ -32,6 +32,7 @@ funk = EX5.planning
 default_job_name = 'Rally'
 job_path = "/root/"
 RALLY_INSTALL_URL = 'https://raw.githubusercontent.com/openstack/rally/master/install_rally.sh'
+DEFAULT_RALLY_GIT = 'https://git.openstack.org/openstack/rally'
 
 # Time to wait before and after running a benchmark (seconds)
 idle_time = 30
@@ -46,46 +47,50 @@ defaults['os-project-domain'] = 'default'
 class rally_g5k(Engine):
 
 	def __init__(self):
-		"""Define options for the experiment"""
+	"""Define options for the experiment"""
 		super(rally_g5k, self).__init__()
 		self.options_parser.add_option("-k", dest="keep_alive",
-										help="Keep the reservation alive.",
-										action="store_true")
+				help="Keep the reservation alive.",
+				action="store_true")
 		self.options_parser.add_option("--job-name", dest="job_name", default=default_job_name,
-										help="Name of the existing OAR job or of the job that will be created. " +
-										"(default: %s)" % default_job_name)
+				help="Name of the existing OAR job or of the job that will be created. " +
+				"(default: %s)" % default_job_name)
 		self.options_parser.add_option("-f", "--force-deploy", dest="force_deploy", default=False,
-										action="store_true",
-										help="Deploy the node without checking if it is already deployed. (default: %(defaults)s)")
+				action="store_true",
+				help="Deploy the node without checking if it is already deployed. (default: %(defaults)s)")
 		self.options_parser.add_option("-v", "--rally-verbose", dest="verbose", default=False,
-										action="store_true",
-										help="Make Rally produce more insightful output. (default: %(defaults))")
+				action="store_true",
+				help="Make Rally produce more insightful output. (default: %(defaults))")
 
 
-	def run(self):
-		"""Perform experiment"""
+		def run(self):
+	"""Perform experiment"""
 		logger.detail(self.options)
 
-		# Checking the options
+# Checking the options
 		if len(self.args) < 2:
-			self.options_parser.print_help()
-			exit(1)
+	self.options_parser.print_help()
+exit(1)
 
-		# Load the configuration file
-		try:
-			with open(self.args[0]) as config_file:
-				self.config = json.load(config_file)
-		except:
-			logger.error("Error reading configuration file")
-			t, value, tb = sys.exc_info()
-			print str(t) + " " + str(value)
-			exit(3)
+# Load the configuration file
+	try:
+	with open(self.args[0]) as config_file:
+self.config = json.load(config_file)
+	except:
+	logger.error("Error reading configuration file")
+t, value, tb = sys.exc_info()
+	print str(t) + " " + str(value)
+exit(3)
 
-		# Put default values
-		for key in defaults:
-			if not key in self.config['authentication'] or self.config['authentication'][key] == "":
-				self.config['authentication'][key] = defaults[key]
-				logger.info("Using default value '%s' for '%s'" % (self.config['authentication'][key], key))
+# Put default values
+	for key in defaults:
+	if not key in self.config['authentication'] or self.config['authentication'][key] == "":
+	self.config['authentication'][key] = defaults[key]
+	logger.info("Using default value '%s' for '%s'" % (self.config['authentication'][key], key))
+
+	if not 'rally-git' in self.config or self.config['rally-git'] == '':
+	self.config['rally-git'] = DEFAULT_RALLY_GIT
+			logger.info("Using default Git for Rally: %s " % self.config['rally-git'])
 
 		try:
 			self.rally_deployed = False
