@@ -47,7 +47,7 @@ defaults['os-project-domain'] = 'default'
 class rally_g5k(Engine):
 
 	def __init__(self):
-	"""Define options for the experiment"""
+		"""Define options for the experiment"""
 		super(rally_g5k, self).__init__()
 		self.options_parser.add_option("-k", dest="keep_alive",
 				help="Keep the reservation alive.",
@@ -63,34 +63,34 @@ class rally_g5k(Engine):
 				help="Make Rally produce more insightful output. (default: %(defaults))")
 
 
-		def run(self):
-	"""Perform experiment"""
+	def run(self):
+		"""Perform experiment"""
 		logger.detail(self.options)
 
-# Checking the options
+		# Checking the options
 		if len(self.args) < 2:
-	self.options_parser.print_help()
-exit(1)
+			self.options_parser.print_help()
+			exit(1)
 
-# Load the configuration file
-	try:
-	with open(self.args[0]) as config_file:
-self.config = json.load(config_file)
-	except:
-	logger.error("Error reading configuration file")
-t, value, tb = sys.exc_info()
-	print str(t) + " " + str(value)
-exit(3)
+		# Load the configuration file
+		try:
+			with open(self.args[0]) as config_file:
+				self.config = json.load(config_file)
+		except:
+			logger.error("Error reading configuration file")
+			t, value, tb = sys.exc_info()
+			print str(t) + " " + str(value)
+			exit(3)
 
-# Put default values
-	for key in defaults:
-	if not key in self.config['authentication'] or self.config['authentication'][key] == "":
-	self.config['authentication'][key] = defaults[key]
-	logger.info("Using default value '%s' for '%s'" % (self.config['authentication'][key], key))
+		# Put default values
+		for key in defaults:
+			if not key in self.config['authentication'] or self.config['authentication'][key] == "":
+				self.config['authentication'][key] = defaults[key]
+				logger.info("Using default value '%s' for '%s'" % (self.config['authentication'][key], key))
 
-	if not 'rally-git' in self.config or self.config['rally-git'] == '':
-	self.config['rally-git'] = DEFAULT_RALLY_GIT
-			logger.info("Using default Git for Rally: %s " % self.config['rally-git'])
+			if not 'rally-git' in self.config or self.config['rally-git'] == '':
+				self.config['rally-git'] = DEFAULT_RALLY_GIT
+				logger.info("Using default Git for Rally: %s " % self.config['rally-git'])
 
 		try:
 			self.rally_deployed = False
