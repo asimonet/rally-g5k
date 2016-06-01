@@ -18,13 +18,14 @@ The script performs the following operations:
 Rally-G5K requires pip, [Execo](http://execo.gforge.inria.fr/) and [Jinja](http://jinja.pocoo.org/).
 
 ## Installation
-To install Rally, first clone the repository:
+To install Rally-G5K, first clone the repository:
 ```
 https://github.com/asimonet/rally-g5k.git
 ```
 
 Then install the dependencies:
 ```
+cd rally-g5k
 pip install -r requirements.txt
 ```
 
