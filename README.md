@@ -29,7 +29,7 @@ cd rally-g5k
 pip install -r requirements.txt
 ```
 
-## Some nodes
+## Some notes
 As this script was made with scientific experimentation in minds, it does a
 certain number of things that you may not want:
 * a pause is made before and after running each scenario. This is intended to
