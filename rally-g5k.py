@@ -23,7 +23,6 @@ from execo_engine import Engine, ParamSweeper, logger, sweep, sweep_stats, slugi
 #logger.setLevel(logging.ERROR)
 
 #EXCLUDED_ELEMENTS = ['paranoia-4', 'paranoia-7', 'paranoia-8']
-EXCLUDED_ELEMENTS = ['sagittaire-69']
 
 # Shortcut
 funk = EX5.planning
@@ -172,7 +171,7 @@ class rally_g5k(Engine):
 					self._get_logs(bench_basename)
 
 					# Get the energy consumption from the kwapi API
-					#self._get_energy(bench_basename, benchmarks[bench_basename]['idle_start'], benchmarks[bench_basename]['idle_end'])
+					self._get_energy(bench_basename, benchmarks[bench_basename]['idle_start'], benchmarks[bench_basename]['idle_end'])
 
 				logger.info('----------------------------------------')
 		except Exception as e:
@@ -200,8 +199,7 @@ class rally_g5k(Engine):
 
 
 	def setup_host(self):
-		"""Deploy operating setup active data on the service node and
-		Hadoop on all"""
+		"""Deploy a node, install dependencies and Rally"""
 
 		logger.info('Deploying environment %s on %s' % (style.emph(self.config['env_name']), self.host) +
 				(' (forced)' if self.options.force_deploy else ''))
@@ -471,45 +469,6 @@ class rally_g5k(Engine):
 			if tear_down:
 				self.tear_down()
 				exit(1)
-
-def sizeof_fmt(num, suffix='B'):
-	for unit in ['', 'K', 'M', 'G', 'T', 'P', 'E', 'Z']:
-		if abs(num) < 1000.0:
-			return "%3.1f%s%s" % (num, unit, suffix)
-		num /= 1000.0
-	return "%.1f%s%s" % (num, 'Y', suffix)
-
-
-def timestamp2str(timestamp):
-	return datetime.datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S")
-
-
-def prediction(timestamp):
-	start = timestamp2str(timestamp)
-	rally_g5k._log("Waiting for job to start (prediction: {0})".format(start), False)
-
-
-class FileOutputHandler(ProcessOutputHandler):
-	__file = None
-
-	def __init__(self, path):
-		super(ProcessOutputHandler, self).__init__()
-		self.__file = open(path, 'a')
-
-	def __del__(self):
-		self.__file.flush()
-		self.__file.close()
-
-	def read(self, process, string, eof=False, error=False):
-		self.__file.write(string)
-		self.__file.flush()
-
-	def read_line(self, process, string, eof=False, error=False):
-		self.__file.write(time.localtime().strftime("[%d-%m-%y %H:%M:%S"))
-		self.__file.write(' ')
-		self.__file.write(string)
-		self.__file.flush()
-
 
 ###################
 # Main
