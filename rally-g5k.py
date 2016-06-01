@@ -92,18 +92,30 @@ class rally_g5k(Engine):
 				self.config['rally-git'] = DEFAULT_RALLY_GIT
 				logger.info("Using default Git for Rally: %s " % self.config['rally-git'])
 
+		# By default, consider there is only one Rally to deploy
+		if 'rallies' not in self.config:
+			self.config['rallies'] = []
+			self.config['rallies'].append({
+				'cluster': self.config['cluster'],
+				'os-services': self.config['os-services'],
+				'os-computes': self.config['os-computes']
+			})
+
+		if len(self.config['rallies']) > 1:
+			logger.info("Deploying %d rallies" % len(self.config['rallies']))
+
 		try:
-			self.rally_deployed = False
+			self.rallies_deployed = [] # Array of ints, corresponding to 'rallies' config key
 
 			# Retrieving the host for the experiment
-			self.host = self.get_host()
+			self.hosts = self.get_hosts()
 			
-			if self.host is None:
-				logger.error("Cannot get host for request")
+			if self.hosts is None:
+				logger.error("Cannot get hosts for request")
 				exit(1)
 
 			# Deploying the host and Rally
-			self.setup_host()
+			self.setup_hosts()
 			
 			# This will be useful in a bit
 			os.mkdir(os.path.join(self.result_dir, 'rally'))
@@ -125,14 +137,14 @@ class rally_g5k(Engine):
 				logger.info("[%d/%d] Preparing benchmark %s" % (i_benchmark, n_benchmarks, bench_file))
 
 				# Send the benchmark description file to the host
-				EX.Put(self.host, [bench_file], connection_params={'user': 'root'}).run()
+				EX.TaktukPut(self.hosts, [bench_file], connection_params={'user': 'root'}).run()
 
 
 				v = ''
 				if self.options.verbose:
 					v = '-d'
 				cmd = "rally %s task start %s" % (v, os.path.basename(bench_file))
-				rally_task = EX.Remote(cmd, [self.host], {'user': 'root'})
+				rally_task = EX.TaktukRemote(cmd, self.hosts, {'user': 'root'})
 
 				logger.info("[%d/%d] Runing benchmark %s" % (i_benchmark, n_benchmarks, bench_file))
 
@@ -150,6 +162,7 @@ class rally_g5k(Engine):
 				time.sleep(idle_time)
 				benchmarks[bench_basename]['idle_end'] = int(time.time())
 
+				# TODO this should deal with multiple deployments
 				if not rally_task.finished_ok:
 					logger.error("Error while running benchmark")
 					benchmarks[bench_basename]['error'] = ''
@@ -183,6 +196,7 @@ class rally_g5k(Engine):
 			self.tear_down()
 
 			# Write info about the benchmarks to experiment.json
+			# TODO this should deal with multiple deployments
 			if self.rally_deployed:
 				out_path = os.path.join(self.result_dir, 'experiment.json')
 				experiment['nodes'] = {}
@@ -200,75 +214,81 @@ class rally_g5k(Engine):
 
 
 	def setup_host(self):
-		"""Deploy operating setup active data on the service node and
-		Hadoop on all"""
+		"""Deploy hots and install Rally on them"""
 
-		logger.info('Deploying environment %s on %s' % (style.emph(self.config['env_name']), self.host) +
+		logger.info('Deploying environment %s on %s' % (style.emph(self.config['env_name']), self.hosts) +
 				(' (forced)' if self.options.force_deploy else ''))
 
 		deployment = None
 		if 'env_user' not in self.config or self.config['env_user'] == '':
-			deployment = EX5.Deployment(hosts=[self.host], env_name=self.config['env_name'])
+			deployment = EX5.Deployment(hosts=self.hosts, env_name=self.config['env_name'])
 		else:
-			deployment = EX5.Deployment(hosts=[self.host], env_name=self.config['env_name'],
+			deployment = EX5.Deployment(hosts=self.hosts, env_name=self.config['env_name'],
 				user=self.config['env_user'])
 
-		deployed_hosts, _ = EX5.deploy(deployment, check_deployed_command=not self.options.force_deploy)
+		deployed_hosts, not_deployed = EX5.deploy(deployment, check_deployed_command=not self.options.force_deploy)
 
-		# Test if rally is installed
-		test_p = EX.SshProcess('rally version', self.host, {'user': 'root'})
+		if len(not_deployed) > 0:
+			logger.error("Some nodes have not been deployed: " + not_deployed)
+
+		# Test if rally is installed on the first host (assuming then it must be
+		# installed on the others)
+		test_p = EX.SshProcess('rally version', self.hosts[0], {'user': 'root'})
 		test_p.ignore_exit_code = True
 		test_p.nolog_exit_code = True
 		test_p.run()
 
 		if test_p.exit_code != 0:
 			# Install rally
-			self._run_or_abort("curl -sO %s" % RALLY_INSTALL_URL, self.host,
+			self._run_or_abort("curl -sO %s" % RALLY_INSTALL_URL, self.hosts,
 				"Could not download Rally install script from %s" % RALLY_INSTALL_URL,
 				conn_params={'user': 'root'})
 
 			logger.info("Installing dependencies on deployed host")
-			self._run_or_abort('apt-get update && apt-get -y update', self.host,
+			self._run_or_abort('apt-get update && apt-get -y update', self.hosts,
 				'Could not update packages on host',
 				conn_params={'user': 'root'})
 			
-			self._run_or_abort('apt-get -y install python-pip', self.host,
+			self._run_or_abort('apt-get -y install python-pip', self.hosts,
 				'Could not install pip on host',
 				conn_params={'user': 'root'})
-			self._run_or_abort('pip install --upgrade setuptools', self.host,
+			self._run_or_abort('pip install --upgrade setuptools', self.hosts,
 				'Could not upgrade setuptools',
 				conn_params={'user': 'root'})
 
 			logger.info("Installing rally from %s" % style.emph(self.config['rally-git']))
 			self._run_or_abort("bash install_rally.sh -y --url %s" %
-				self.config['rally-git'], self.host, 'Could not install Rally on host',
+				self.config['rally-git'], self.hosts, 'Could not install Rally on host',
 				conn_params={'user': 'root'})
 		else:
 			logger.info("Rally %s is already installed" % test_p.stdout.rstrip())
 
-		# Setup the deployment file
-		vars = {
-			"controller": self.config['os-services']['controller'],
-			"os_region": self.config['authentication']['os-region'],
-			"os_username": self.config['authentication']['os-username'],
-			"os_password": self.config['authentication']['os-password'],
-			"os_tenant": self.config['authentication']['os-tenant'],
-			"os_user_domain": self.config['authentication']['os-user-domain'],
-			"os_admin_domain": self.config['authentication']['os-admin-domain'],
-			"os_project_domain": self.config['authentication']['os-project-domain']
-		}
-		rally_deployment = self._render_template('templates/deployment_existing.json', vars)
-		EX.Put([self.host], [rally_deployment],
-			remote_location='deployment_existing.json',
-			connection_params={'user': 'root'}).run()
+		i = 0
+		for rally in rallies:
+			# Setup the deployment file
+			vars = {
+				"controller": rally['os-services']['controller'],
+				"os_region": self.config['authentication']['os-region'],
+				"os_username": self.config['authentication']['os-username'],
+				"os_password": self.config['authentication']['os-password'],
+				"os_tenant": self.config['authentication']['os-tenant'],
+				"os_user_domain": self.config['authentication']['os-user-domain'],
+				"os_admin_domain": self.config['authentication']['os-admin-domain'],
+				"os_project_domain": self.config['authentication']['os-project-domain']
+			}
+			rally_deployment = self._render_template('templates/deployment_existing.json', vars)
+			EX.Put([self.hosts[i]], [rally_deployment],
+				remote_location='deployment_existing.json',
+				connection_params={'user': 'root'}).run()
 
-		# Create a Rally deployment
-		self._run_or_abort("rally deployment create --filename deployment_existing.json "
-				"--name %s" % self.config['deployment_name'], self.host, 'Could not create the Rally deployment',
-				conn_params={'user': 'root'})
-		self.rally_deployed = True
+			# Create a Rally deployment
+			self._run_or_abort("rally deployment create --filename deployment_existing.json "
+					"--name %s" % self.config['deployment_name'], self.hosts[i],
+					'Could not create the Rally deployment',
+					conn_params={'user': 'root'})
+			self.rally_deployed.append(i)
 
-		logger.info("Rally has been deployed correctly")
+			logger.info("Rally has been deployed correctly on %s" % self.hosts[i])
 
 
 	def get_host(self):
@@ -298,16 +318,17 @@ class rally_g5k(Engine):
 		EX5.wait_oar_job_start(self.job_id, self.site)
 
 		pp(EX5.get_oar_job_nodes(self.job_id, self.site))
-		return EX5.get_oar_job_nodes(self.job_id, self.site)[0]
+		return EX5.get_oar_job_nodes(self.job_id, self.site)
 
 
 	def _make_reservation(self, site):
 		"""Make a new reservation"""
 
-		elements = {self.config['cluster']: 1}
+		elements = {self.config['cluster']: len(self.config['rallies'])}
 		logger.info('Finding slot for the experiment '
-					'\nrally %s:1',
-					style.host(self.config['cluster']).rjust(5))
+					'\nrally %s:%s',
+					style.host(self.config['cluster']).rjust(5),
+					len(self.config['rallies']))
 
 		planning = funk.get_planning(elements)
 		slots = funk.compute_slots(planning, walltime=self.config['walltime'].encode('ascii', 'ignore'), excluded_elements=EXCLUDED_ELEMENTS)
@@ -344,12 +365,12 @@ class rally_g5k(Engine):
 			if self.rally_deployed:
 				logger.info("Destroying Rally deployment " + self.config['deployment_name'])
 				self._run_or_abort('rally deployment destroy %s' % self.config['deployment_name'],
-						self.host,
+						self.hosts,
 						'Could not destroy the Rally deployment. This will likely '
 						'cause errors when the node is used again.',
 						False, {'user': 'root'})
 		except AttributeError:
-			pass # self.host has not been defined yet, and that's ok
+			pass # self.hosts has not been defined yet, and that's ok
 
 		# Kill the job
 		try:
@@ -359,6 +380,7 @@ class rally_g5k(Engine):
 		except AttributeError:
 			pass # self.job_id has not been defined either, and that's ok too
 
+	# TODO: deal with multiple deployments
 	def _get_logs(self, bench_file):
 		# Generating the HTML file
 		logger.info("Getting the results into " + self.result_dir)
@@ -454,10 +476,12 @@ class rally_g5k(Engine):
 		In addition, if tear_down is True, the tear_down() method will be
 		called and the process will exit with return code 1"""
 
-		if conn_params:
-			p = EX.SshProcess(cmd, host, conn_params)
+
+		if isinstance(host, list):
+			p = EX.TaktukRemoteProcess(cmd, host, conn_params)
 		else:
 			p = EX.SshProcess(cmd, host)
+
 		p.run()
 
 		if p.exit_code != 0:
@@ -479,37 +503,8 @@ def sizeof_fmt(num, suffix='B'):
 		num /= 1000.0
 	return "%.1f%s%s" % (num, 'Y', suffix)
 
-
 def timestamp2str(timestamp):
 	return datetime.datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S")
-
-
-def prediction(timestamp):
-	start = timestamp2str(timestamp)
-	rally_g5k._log("Waiting for job to start (prediction: {0})".format(start), False)
-
-
-class FileOutputHandler(ProcessOutputHandler):
-	__file = None
-
-	def __init__(self, path):
-		super(ProcessOutputHandler, self).__init__()
-		self.__file = open(path, 'a')
-
-	def __del__(self):
-		self.__file.flush()
-		self.__file.close()
-
-	def read(self, process, string, eof=False, error=False):
-		self.__file.write(string)
-		self.__file.flush()
-
-	def read_line(self, process, string, eof=False, error=False):
-		self.__file.write(time.localtime().strftime("[%d-%m-%y %H:%M:%S"))
-		self.__file.write(' ')
-		self.__file.write(string)
-		self.__file.flush()
-
 
 ###################
 # Main

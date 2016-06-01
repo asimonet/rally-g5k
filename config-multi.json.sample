@@ -1,4 +1,5 @@
 {
+	"cluster": "sagittaire",
 	"walltime": "02:00:00",
 	"env_name": "wheezy-x64-prod",
 	"rally-git": "https://git.openstack.org/openstack/rally",
@@ -15,7 +16,6 @@
 	},
 
 	"rallies": {
-		"cluster": "sagittaire",
 		"os-services": {
 			"controller": "taurus-12.lyon.grid5000.fr",
 			"storage": "taurus-15.lyon.grid5000.fr",
