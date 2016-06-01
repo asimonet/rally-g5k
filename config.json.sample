@@ -1,10 +1,10 @@
 {
 	"cluster": "sagittaire",
 	"walltime": "02:00:00",
-	"env_name": "wheezy-x64-prod",
+	"env-name": "wheezy-x64-prod",
 	"rally-git": "https://git.openstack.org/openstack/rally",
 
-	"deployment_name": "os-rally",
+	"deployment-name": "os-rally",
 	"authentication": {
 		"os-tenant": "openstack",
 		"os-username": "admin",

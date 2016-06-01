@@ -200,15 +200,15 @@ class rally_g5k(Engine):
 	def setup_host(self):
 		"""Deploy a node, install dependencies and Rally"""
 
-		logger.info('Deploying environment %s on %s' % (style.emph(self.config['env_name']), self.host) +
+		logger.info('Deploying environment %s on %s' % (style.emph(self.config['env-name']), self.host) +
 				(' (forced)' if self.options.force_deploy else ''))
 
 		deployment = None
-		if 'env_user' not in self.config or self.config['env_user'] == '':
-			deployment = EX5.Deployment(hosts=[self.host], env_name=self.config['env_name'])
+		if 'env-user' not in self.config or self.config['env-user'] == '':
+			deployment = EX5.Deployment(hosts=[self.host], env-name=self.config['env-name'])
 		else:
-			deployment = EX5.Deployment(hosts=[self.host], env_name=self.config['env_name'],
-				user=self.config['env_user'])
+			deployment = EX5.Deployment(hosts=[self.host], env-name=self.config['env-name'],
+				user=self.config['env-user'])
 
 		deployed_hosts, _ = EX5.deploy(deployment, check_deployed_command=not self.options.force_deploy)
 
@@ -261,7 +261,7 @@ class rally_g5k(Engine):
 
 		# Create a Rally deployment
 		self._run_or_abort("rally deployment create --filename deployment_existing.json "
-				"--name %s" % self.config['deployment_name'], self.host, 'Could not create the Rally deployment',
+				"--name %s" % self.config['deployment-name'], self.host, 'Could not create the Rally deployment',
 				conn_params={'user': 'root'})
 		self.rally_deployed = True
 
@@ -339,8 +339,8 @@ class rally_g5k(Engine):
 		# Destroy the Rally deployment
 		try:
 			if self.rally_deployed:
-				logger.info("Destroying Rally deployment " + self.config['deployment_name'])
-				self._run_or_abort('rally deployment destroy %s' % self.config['deployment_name'],
+				logger.info("Destroying Rally deployment " + self.config['deployment-name'])
+				self._run_or_abort('rally deployment destroy %s' % self.config['deployment-name'],
 						self.host,
 						'Could not destroy the Rally deployment. This will likely '
 						'cause errors when the node is used again.',
