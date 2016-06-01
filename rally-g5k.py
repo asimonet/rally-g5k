@@ -37,7 +37,6 @@ DEFAULT_RALLY_GIT = 'https://git.openstack.org/openstack/rally'
 idle_time = 30
 
 defaults = {}
-defaults['env_user'] = 'ansimonet'
 defaults['os-region'] = 'RegionOne'
 defaults['os-user-domain'] = 'default'
 defaults['os-admin-domain'] = 'default'
