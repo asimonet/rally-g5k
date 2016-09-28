@@ -23,6 +23,7 @@ from execo_engine import Engine, ParamSweeper, logger, sweep, sweep_stats, slugi
 #logger.setLevel(logging.ERROR)
 
 #EXCLUDED_ELEMENTS = ['paranoia-4', 'paranoia-7', 'paranoia-8']
+EXCLUDED_ELEMENTS = []
 
 # Shortcut
 funk = EX5.planning
@@ -205,9 +206,9 @@ class rally_g5k(Engine):
 
 		deployment = None
 		if 'env-user' not in self.config or self.config['env-user'] == '':
-			deployment = EX5.Deployment(hosts=[self.host], env-name=self.config['env-name'])
+			deployment = EX5.Deployment(hosts=[self.host], env_name=self.config['env-name'])
 		else:
-			deployment = EX5.Deployment(hosts=[self.host], env-name=self.config['env-name'],
+			deployment = EX5.Deployment(hosts=[self.host], env_name=self.config['env-name'],
 				user=self.config['env-user'])
 
 		deployed_hosts, _ = EX5.deploy(deployment, check_deployed_command=not self.options.force_deploy)
