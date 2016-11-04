@@ -40,7 +40,6 @@ idle_time = 30
 defaults = {}
 defaults['os-region'] = 'RegionOne'
 defaults['os-user-domain'] = 'default'
-defaults['os-admin-domain'] = 'default'
 defaults['os-project-domain'] = 'default'
 
 class rally_g5k(Engine):
@@ -60,6 +59,9 @@ class rally_g5k(Engine):
 		self.options_parser.add_option("-v", "--rally-verbose", dest="verbose", default=False,
 				action="store_true",
 				help="Make Rally produce more insightful output. (default: %(defaults))")
+                self.options_parser.add_option("--rally-args", dest="rally_args", default=None,
+				help="Input tasks args (JSON dict). These args are usdo to render the Jinja2 " +
+                                    "template in the input tasks.")
 
 
 	def run(self):
@@ -131,6 +133,16 @@ class rally_g5k(Engine):
 				if self.options.verbose:
 					v = '-d'
 				cmd = "rally %s task start %s" % (v, os.path.basename(bench_file))
+                                
+                                # If necessary, send the rally task args
+                                if self.options.rally_args is not None:
+                                    filename = os.path.basename(self.options.rally_args)
+                                    cmd = cmd + ' --task-args-file ' + filename
+                                    
+                                    EX.Put([self.host], [self.options.rally_args],
+                                            remote_location=filename,
+                                            connection_params={'user': 'root'}).run()
+                                    
 				rally_task = EX.Remote(cmd, [self.host], {'user': 'root'})
 
 				logger.info("[%d/%d] Runing benchmark %s" % (i_benchmark, n_benchmarks, bench_file))
@@ -169,9 +181,6 @@ class rally_g5k(Engine):
 				else:
 					# Getting the results back
 					self._get_logs(bench_basename)
-
-					# Get the energy consumption from the kwapi API
-					self._get_energy(bench_basename, benchmarks[bench_basename]['idle_start'], benchmarks[bench_basename]['idle_end'])
 
 				logger.info('----------------------------------------')
 		except Exception as e:
@@ -252,7 +261,6 @@ class rally_g5k(Engine):
 			"os_password": self.config['authentication']['os-password'],
 			"os_tenant": self.config['authentication']['os-tenant'],
 			"os_user_domain": self.config['authentication']['os-user-domain'],
-			"os_admin_domain": self.config['authentication']['os-admin-domain'],
 			"os_project_domain": self.config['authentication']['os-project-domain']
 		}
 		rally_deployment = self._render_template('templates/deployment_existing.json', vars)
