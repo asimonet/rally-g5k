@@ -8,7 +8,6 @@
         "password": "{{os_password}}",
         "project_name": "{{os_tenant}}",
         "user_domain_name": "{{os_user_domain}}",
-        "admin_domain_name": "{{os_admin_domain}}",
         "project_domain_name": "{{os_project_domain}}"
     },
     "https_insecure": false,
